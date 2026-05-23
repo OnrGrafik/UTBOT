@@ -1,0 +1,136 @@
+//@version=5
+// ─────────────────────────────────────────────────────────────
+//  UTBot + STC Kombine Strateji — Webhook Versiyonu
+//  Render.com bot'una JSON alert gönderir
+// ─────────────────────────────────────────────────────────────
+
+strategy(
+  title       = "UTBot + STC Bot (Webhook)",
+  shorttitle  = "UTBot+STC",
+  overlay     = true,
+  default_qty_type  = strategy.percent_of_equity,
+  default_qty_value = 100,
+  commission_type   = strategy.commission.percent,
+  commission_value  = 0.05,
+  initial_capital   = 1000
+)
+
+// ── UTBOT ─────────────────────────────────────────────────────
+keyvalue  = input.float(2.0,  "UT Key Value", step=0.5)
+atrperiod = input.int  (1,    "ATR Periyodu")
+
+xATR  = ta.atr(atrperiod)
+nLoss = keyvalue * xATR
+
+var float xATRTS = 0.0
+xATRTS := close > nz(xATRTS[1]) and close[1] > nz(xATRTS[1]) ? math.max(nz(xATRTS[1]), close - nLoss) :
+          close < nz(xATRTS[1]) and close[1] < nz(xATRTS[1]) ? math.min(nz(xATRTS[1]), close + nLoss) :
+          close > nz(xATRTS[1])                               ? close - nLoss : close + nLoss
+
+var int pos = 0
+pos := close[1] < nz(xATRTS[1]) and close > nz(xATRTS[1]) ?  1 :
+       close[1] > nz(xATRTS[1]) and close < nz(xATRTS[1]) ? -1 : nz(pos[1])
+
+utbuy  = ta.crossover (close, xATRTS)
+utsell = ta.crossunder(close, xATRTS)
+
+tsColor = pos == 1 ? color.green : pos == -1 ? color.red : color.blue
+plot(xATRTS, color=tsColor, linewidth=2, title="ATR Trailing Stop")
+
+// ── STC ───────────────────────────────────────────────────────
+stc_len   = input.int  (80,  "STC Uzunluk")
+stc_fast  = input.int  (27,  "FastLength")
+stc_slow  = input.int  (50,  "SlowLength")
+stc_alpha = input.float(0.5, "Alpha", step=0.1)
+
+macdLine(src, fast, slow) =>
+    ta.ema(src, fast) - ta.ema(src, slow)
+
+stcCalc(len, fast, slow, alpha) =>
+    var float f1 = 0.0
+    var float pf = 0.0
+    var float f2 = 0.0
+    var float pff = 0.0
+    m   = macdLine(close, fast, slow)
+    ll  = ta.lowest(m, len)
+    hh  = ta.highest(m, len) - ll
+    f1  := hh > 0 ? (m - ll) / hh * 100 : nz(f1[1])
+    pf  := na(pf[1]) ? f1 : pf[1] + alpha * (f1 - pf[1])
+    ll2 = ta.lowest(pf, len)
+    hh2 = ta.highest(pf, len) - ll2
+    f2  := hh2 > 0 ? (pf - ll2) / hh2 * 100 : nz(f2[1])
+    pff := na(pff[1]) ? f2 : pff[1] + alpha * (f2 - pff[1])
+    pff
+
+stc = stcCalc(stc_len, stc_fast, stc_slow, stc_alpha)
+
+// ── Sinyal koşulları ──────────────────────────────────────────
+//  LONG  : UTBot Buy  AND STC[1] < 30  AND STC > STC[1]
+//  SHORT : UTBot Sell AND STC[1] > 70  AND STC < STC[1]
+longCond  = utbuy  and stc[1] < 30 and stc > stc[1]
+shortCond = utsell and stc[1] > 70 and stc < stc[1]
+
+// ── Trailing stop tetikleme (5dk kapanış kontrolü) ─────────────
+// Long pozisyondayken kapanış xATRTS altına düştüyse
+longStop  = strategy.position_size > 0 and close < xATRTS
+// Short pozisyondayken kapanış xATRTS üstüne çıktıysa
+shortStop = strategy.position_size < 0 and close > xATRTS
+
+// ── Strategy backtesting ──────────────────────────────────────
+tp_pct = input.float(0.5, "TP %", step=0.1) / 100
+
+if longCond and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+if shortCond and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    entryP = strategy.position_avg_price
+    strategy.exit("Long TP50", from_entry="Long", qty_percent=50, limit=entryP*(1+tp_pct))
+    if close < xATRTS
+        strategy.close("Long", comment="TS Stop")
+if strategy.position_size < 0
+    entryP = strategy.position_avg_price
+    strategy.exit("Short TP50", from_entry="Short", qty_percent=50, limit=entryP*(1-tp_pct))
+    if close > xATRTS
+        strategy.close("Short", comment="TS Stop")
+
+// ── Etiketler ─────────────────────────────────────────────────
+plotshape(longCond,  text="▲ LONG",  style=shape.labelup,   location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+plotshape(shortCond, text="▼ SHORT", style=shape.labeldown, location=location.abovebar, color=color.red,   textcolor=color.white, size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+//  ALERT KOŞULLARI — Her biri için ayrı alert ekle
+//  Alert mesajı → TradingView → Webhook URL → Render Bot
+//
+//  NOT: TradingView'da her alertCondition için ayrı bir alert
+//  oluştur. Webhook URL: https://UYGULAMANIZ.onrender.com/webhook
+// ══════════════════════════════════════════════════════════════
+
+// ── LONG Alert ────────────────────────────────────────────────
+alertcondition(
+  longCond,
+  title   = "LONG Sinyali",
+  message = '{"secret":"WEBHOOK_SECRET_BURAYA","signal":"LONG","symbol":"{{ticker}}","price":"{{close}}"}'
+)
+
+// ── SHORT Alert ───────────────────────────────────────────────
+alertcondition(
+  shortCond,
+  title   = "SHORT Sinyali",
+  message = '{"secret":"WEBHOOK_SECRET_BURAYA","signal":"SHORT","symbol":"{{ticker}}","price":"{{close}}"}'
+)
+
+// ── Long Stop Alert ───────────────────────────────────────────
+alertcondition(
+  longStop,
+  title   = "LONG Stop",
+  message = '{"secret":"WEBHOOK_SECRET_BURAYA","signal":"LONG_STOP","symbol":"{{ticker}}","price":"{{close}}"}'
+)
+
+// ── Short Stop Alert ──────────────────────────────────────────
+alertcondition(
+  shortStop,
+  title   = "SHORT Stop",
+  message = '{"secret":"WEBHOOK_SECRET_BURAYA","signal":"SHORT_STOP","symbol":"{{ticker}}","price":"{{close}}"}'
+)

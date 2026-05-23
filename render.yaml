@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: utbot-stc-trading-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: BYBIT_API_KEY
+        sync: false
+      - key: BYBIT_API_SECRET
+        sync: false
+      - key: BYBIT_TESTNET
+        value: "false"
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_THREAD_ID
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: SYMBOL
+        value: BTCUSDT
+      - key: LEVERAGE
+        value: "5"
+      - key: ORDER_USDT
+        value: "50"
+      - key: DAILY_TARGET
+        value: "10"
+      - key: TP_PCT
+        value: "0.005"
