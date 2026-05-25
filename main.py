@@ -49,7 +49,7 @@ SYMBOLS = {
     "BTCUSDT": {"order_usdt": float(os.environ.get("BTC_ORDER_USDT", "10")),
                 "tick": 0.1, "qty_decimals": 3, "min_qty": 0.001},
     "ETHUSDT": {"order_usdt": float(os.environ.get("ETH_ORDER_USDT", "5")),
-                "tick": 0.01, "qty_decimals": 3, "min_qty": 0.01},
+                "tick": 0.01, "qty_decimals": 2, "min_qty": 0.01},
 }
 
 BTC_SECRET = os.environ.get("BTC_WEBHOOK_SECRET", WEBHOOK_SECRET)
@@ -203,10 +203,22 @@ async def set_leverage_all():
             log.warning("%s kaldıraç: %s", sym, e)
 
 def get_qty(symbol: str, price: float) -> str:
+    """Bybit'in min qty ve min order value sınırlarına uygun qty hesabı."""
     cfg = SYMBOLS[symbol]
     raw = (cfg["order_usdt"] * LEVERAGE) / price
     qty = max(raw, cfg["min_qty"])
-    return str(round(qty, cfg["qty_decimals"]))
+    # Doğru ondalık sayıya yuvarla (aşağı, ki bakiyeyi aşmasın)
+    factor = 10 ** cfg["qty_decimals"]
+    qty = math.floor(qty * factor) / factor
+    # Yuvarlama sonrası min_qty altına düştüyse min_qty kullan
+    if qty < cfg["min_qty"]:
+        qty = cfg["min_qty"]
+    # Bybit min order value kontrolü: ETH/BTC için 5 USDT
+    order_value = qty * price
+    if order_value < 5.0:
+        # Min order value'yu sağlayacak qty hesapla
+        qty = math.ceil((5.0 / price) * factor) / factor
+    return str(qty)
 
 def round_price(symbol: str, price: float) -> str:
     tick = SYMBOLS[symbol]["tick"]
@@ -626,14 +638,14 @@ async def process_symbol(symbol: str):
 
 async def main_loop():
     await asyncio.sleep(10)
-    log.info("Ana döngü başladı — 20 saniyede bir tüm semboller işleniyor")
+    log.info("Ana döngü başladı — 60 saniyede bir tüm semboller işleniyor")
     while True:
         try:
             for sym in SYMBOLS:
                 await process_symbol(sym)
         except Exception as e:
             log.error("main_loop: %s", e)
-        await asyncio.sleep(20)
+        await asyncio.sleep(60)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Raporlar
