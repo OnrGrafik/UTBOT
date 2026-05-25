@@ -711,6 +711,72 @@ async def report_scheduler():
         await asyncio.sleep(60)
 
 # ─── Restart sonrası kurtarma ───────────────────────────────────────────────
+
+async def sync_trades_from_bybit():
+    """
+    Bot başladığında SQLite boşsa Bybit'in trade geçmişinden son 7 günü çek.
+    Restart sonrası rapor geçmişi kaybolmasın.
+    """
+    try:
+        con = sqlite3.connect(DB_PATH)
+        existing = con.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        con.close()
+        if existing > 0:
+            log.info("SQLite'ta %d trade var, sync atlanıyor", existing)
+            return
+
+        log.info("SQLite boş → Bybit'ten son 7 gün trade geçmişi yükleniyor")
+        end_ts = int(datetime.now().timestamp() * 1000)
+        start_ts = end_ts - (7 * 24 * 60 * 60 * 1000)
+
+        total = 0
+        for symbol in SYMBOLS:
+            try:
+                pnl_r = bybit_call(
+                    bybit.get_closed_pnl,
+                    category="linear", symbol=symbol,
+                    startTime=start_ts, endTime=end_ts, limit=100
+                )
+                closed_trades = pnl_r.get("result", {}).get("list", [])
+                for t in closed_trades:
+                    pnl = float(t.get("closedPnl", 0))
+                    # side = kapanış yönü; gerçek pozisyon yönü tersi
+                    cls_side = t.get("side", "")
+                    actual_side = "Sell" if cls_side == "Buy" else "Buy"
+                    entry = float(t.get("avgEntryPrice") or 0)
+                    exit_p = float(t.get("avgExitPrice") or 0)
+                    qty = float(t.get("qty") or 0)
+                    if entry == 0 or exit_p == 0:
+                        continue
+                    pnl_pct = ((exit_p - entry) / entry) * (1 if actual_side == "Buy" else -1) * 100
+                    # %0.4+ kar = TP olarak kabul et (yaklaşık)
+                    result = "TP" if pnl_pct >= 0.4 else "STOP"
+                    opened = datetime.fromtimestamp(int(t.get("createdTime", 0))/1000, TZ).isoformat()
+                    closed = datetime.fromtimestamp(int(t.get("updatedTime", 0))/1000, TZ).isoformat()
+                    save_trade(symbol, actual_side, entry, exit_p, qty, pnl,
+                               result, 0, opened, closed)
+                    total += 1
+            except Exception as e:
+                log.warning("%s sync: %s", symbol, e)
+
+        if total > 0:
+            # Günlük P&L'i de yeniden hesapla
+            now = datetime.now(TZ)
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_rows = get_trades_between(
+                start.isoformat(),
+                (start + timedelta(days=1)).isoformat()
+            )
+            today_pnl = sum(r[6] for r in today_rows)
+            _daily["pnl"] = today_pnl
+            await tg(f"📦 <b>Trade Geçmişi Kurtarıldı</b>\n"
+                     f"Bybit'ten son 7 gün: <b>{total} işlem</b> yüklendi\n"
+                     f"Bugünkü P&L: ${today_pnl:+.2f}")
+            log.info("Bybit sync tamamlandı: %d trade", total)
+    except Exception as e:
+        log.error("sync_trades_from_bybit: %s", e)
+
+
 async def recover_positions():
     recovered = []
     for sym in SYMBOLS:
@@ -755,6 +821,7 @@ async def lifespan(app: FastAPI):
     init_db()
     await set_leverage_all()
     await recover_positions()
+    await sync_trades_from_bybit()
     asyncio.create_task(main_loop())
     asyncio.create_task(report_scheduler())
     log.info("Bot v6 FULL AUTONOMOUS başladı")
