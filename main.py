@@ -44,6 +44,7 @@ STC_LEN        = int(os.environ.get("STC_LEN", "80"))
 STC_FAST       = int(os.environ.get("STC_FAST", "27"))
 STC_SLOW       = int(os.environ.get("STC_SLOW", "50"))
 STC_ALPHA      = float(os.environ.get("STC_ALPHA", "0.5"))
+RSI_PERIOD     = int(os.environ.get("RSI_PERIOD", "14"))
 
 SYMBOLS = {
     "BTCUSDT": {"order_usdt": float(os.environ.get("BTC_ORDER_USDT", "10")),
@@ -368,17 +369,39 @@ def calc_indicators(symbol: str):
         f2[i] = (pf[i] - ll2) / hh2 * 100 if hh2 > 0 else (f2[i-1] if i > 0 else 0)
         pff[i] = f2[i] if i == 0 else pff[i-1] + a * (f2[i] - pff[i-1])
 
+    # ── RSI (Wilder's smoothed — Pine Script ta.rsi ile birebir)
+    p = RSI_PERIOD
+    gains = [0.0] * n
+    losses = [0.0] * n
+    for i in range(1, n):
+        diff = closes[i] - closes[i-1]
+        gains[i]  = max(diff, 0.0)
+        losses[i] = max(-diff, 0.0)
+    # İlk ortalama: basit ortalama (seed)
+    avg_gain = sum(gains[1:p+1]) / p if n > p else 0.0
+    avg_loss = sum(losses[1:p+1]) / p if n > p else 0.0
+    rsi = [50.0] * n
+    for i in range(p + 1, n):
+        avg_gain = (avg_gain * (p - 1) + gains[i]) / p
+        avg_loss = (avg_loss * (p - 1) + losses[i]) / p
+        if avg_loss == 0:
+            rsi[i] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi[i] = 100.0 - (100.0 / (1.0 + rs))
+
     return {
         "times": times, "closes": closes, "highs": highs, "lows": lows,
         "xATRTS": xATRTS, "stc": pff, "utbuy": utbuy, "utsell": utsell,
+        "rsi": rsi,
     }
 
 def detect_signal(ind, want_closed: bool = True) -> tuple[str, int]:
     """
     En son KAPANMIŞ mumda sinyal var mı bak.
     Pine Script koşulları:
-      LONG  = utbuy  AND stc[1] < 30 AND stc > stc[1]
-      SHORT = utsell AND stc[1] > 70 AND stc < stc[1]
+      LONG  = utbuy  AND stc[1] < 30 AND stc > stc[1]  AND rsi > 50
+      SHORT = utsell AND stc[1] > 70 AND stc < stc[1]  AND rsi < 50
     Döner: (signal_name veya None, kontrol edilen bar index)
     """
     n = len(ind["closes"])
@@ -386,15 +409,23 @@ def detect_signal(ind, want_closed: bool = True) -> tuple[str, int]:
     idx = n - 2 if want_closed else n - 1
     if idx < 1: return None, idx
 
-    utbuy   = ind["utbuy"][idx]
-    utsell  = ind["utsell"][idx]
-    stc_now = ind["stc"][idx]
+    utbuy    = ind["utbuy"][idx]
+    utsell   = ind["utsell"][idx]
+    stc_now  = ind["stc"][idx]
     stc_prev = ind["stc"][idx-1]
+    rsi_now  = ind["rsi"][idx]
 
-    if utbuy and stc_prev < 30 and stc_now > stc_prev:
+    if utbuy and stc_prev < 30 and stc_now > stc_prev and rsi_now > 50:
+        log.info("RSI filtre LONG geçti: RSI=%.1f", rsi_now)
         return "LONG", idx
-    if utsell and stc_prev > 70 and stc_now < stc_prev:
+    if utsell and stc_prev > 70 and stc_now < stc_prev and rsi_now < 50:
+        log.info("RSI filtre SHORT geçti: RSI=%.1f", rsi_now)
         return "SHORT", idx
+    # RSI filtresi engelledi mi logla
+    if utbuy and stc_prev < 30 and stc_now > stc_prev and rsi_now <= 50:
+        log.info("LONG sinyali RSI filtresi engelledi: RSI=%.1f (<= 50)", rsi_now)
+    if utsell and stc_prev > 70 and stc_now < stc_prev and rsi_now >= 50:
+        log.info("SHORT sinyali RSI filtresi engelledi: RSI=%.1f (>= 50)", rsi_now)
     return None, idx
 
 # ══════════════════════════════════════════════════════════════════════════════
