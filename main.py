@@ -918,6 +918,13 @@ async def recover_positions():
         await tg(msg)
     else:
         await tg("🟢 <b>Bot v6 Başladı</b> — Otonom mod aktif (20sn döngü)")
+        await alert_tg_ut(
+            f"🟢 <b>UTBOT Aktif</b>\n"
+            f"BTC teminat: ${SYMBOLS['BTCUSDT']['order_usdt']:.0f} | "
+            f"ETH teminat: ${SYMBOLS['ETHUSDT']['order_usdt']:.0f}\n"
+            f"Kaldıraç: {LEVERAGE}x | Testnet: {BYBIT_TESTNET}\n"
+            f"Günlük hedef: ${DAILY_TARGET:.0f} USDT"
+        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FastAPI
