@@ -727,7 +727,7 @@ async def process_symbol(symbol: str):
 
     except Exception as e:
         log.error("process_symbol %s: %s", symbol, e, exc_info=True)
-        await alert_tg_ut(f"🚨 <b>UTBOT process_symbol hatası</b> — {html_safe(symbol)}\n{html_safe(str(e)[:200]}")
+        await alert_tg_ut(f"🚨 <b>UTBOT process_symbol hatası</b> — {html_safe(symbol)}\n{html_safe(str(e)[:200])}")
 
 async def main_loop():
     await asyncio.sleep(10)
@@ -738,7 +738,7 @@ async def main_loop():
                 await process_symbol(sym)
         except Exception as e:
             log.error("main_loop: %s", e)
-            await alert_tg_ut(f"🚨 <b>UTBOT ana döngü hatası</b>\n{html_safe(str(e)[:200]}")
+            await alert_tg_ut(f"🚨 <b>UTBOT ana döngü hatası</b>\n{html_safe(str(e)[:200])}")
         await asyncio.sleep(60)
 
 # ══════════════════════════════════════════════════════════════════════════════
