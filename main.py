@@ -248,6 +248,9 @@ def cancel_all_orders(symbol):
         log.warning("Cancel %s: %s", symbol, e)
 
 # ─── Telegram ───────────────────────────────────────────────────────────────
+def html_safe(val) -> str:
+    return str(val).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 async def tg(text: str):
     params = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if TELEGRAM_THREAD_ID:
@@ -258,6 +261,13 @@ async def tg(text: str):
                                   json=params, timeout=10)
         if r.status_code != 200:
             log.warning("Telegram: %s", r.text)
+            if r.status_code == 400 and "parse" in r.text.lower():
+                params2 = dict(params)
+                params2.pop("parse_mode", None)
+                r2 = await client.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                                       json=params2, timeout=10)
+                if r2.status_code != 200:
+                    log.warning("Telegram (plain): %s", r2.text)
     except Exception as e:
         log.error("TG: %s", e)
 
@@ -415,7 +425,7 @@ async def open_long(symbol: str, reason: str = "auto-signal"):
 
             r1 = place_market(symbol, "Buy", qty)
             if r1.get("retCode", 0) != 0:
-                await tg(f"❌ {symbol} LONG market hatası: {r1.get('retMsg')}"); return
+                await tg(f"❌ {symbol} LONG market hatası: {html_safe(r1.get('retMsg'))}"); return
 
             # TP limit emrini ayrı try'da
             try:
@@ -438,7 +448,7 @@ async def open_long(symbol: str, reason: str = "auto-signal"):
             )
         except Exception as e:
             log.error("open_long %s: %s", symbol, e)
-            await tg(f"❌ {symbol} LONG açma hatası: {e}")
+            await tg(f"❌ {symbol} LONG açma hatası: {html_safe(e)}")
 
 async def open_short(symbol: str, reason: str = "auto-signal"):
     async with _locks[symbol]:
@@ -463,7 +473,7 @@ async def open_short(symbol: str, reason: str = "auto-signal"):
 
             r1 = place_market(symbol, "Sell", qty)
             if r1.get("retCode", 0) != 0:
-                await tg(f"❌ {symbol} SHORT market hatası: {r1.get('retMsg')}"); return
+                await tg(f"❌ {symbol} SHORT market hatası: {html_safe(r1.get('retMsg'))}"); return
 
             try:
                 place_limit_tp(symbol, "Sell", half_qty, round_price(symbol, tp_price))
@@ -485,7 +495,7 @@ async def open_short(symbol: str, reason: str = "auto-signal"):
             )
         except Exception as e:
             log.error("open_short %s: %s", symbol, e)
-            await tg(f"❌ {symbol} SHORT açma hatası: {e}")
+            await tg(f"❌ {symbol} SHORT açma hatası: {html_safe(e)}")
 
 async def close_position(symbol: str, reason: str):
     async with _locks[symbol]:
@@ -534,7 +544,7 @@ async def close_position(symbol: str, reason: str):
                 await tg(f"🎯 <b>Günlük ${DAILY_TARGET:.0f} Hedefi!</b> Toplam: <b>${_daily['pnl']:.2f}</b> ✅")
         except Exception as e:
             log.error("close %s: %s", symbol, e)
-            await tg(f"❌ {symbol} kapatma hatası: {e}")
+            await tg(f"❌ {symbol} kapatma hatası: {html_safe(e)}")
 
 async def mark_tp50(symbol: str):
     async with _locks[symbol]:
@@ -612,11 +622,11 @@ async def process_symbol(symbol: str):
 
                     if pos["side"] == "Buy" and last_close < ts:
                         log.info("⚠️ %s LONG STOP: close %.2f < TS %.2f", symbol, last_close, ts)
-                        await close_position(symbol, f"Trailing Stop (5dk kapanış ${last_close:,.2f} < ${ts:,.2f})")
+                        await close_position(symbol, f"Trailing Stop (5dk kapanış ${last_close:,.2f} ↓ TS ${ts:,.2f})")
                         return
                     if pos["side"] == "Sell" and last_close > ts:
                         log.info("⚠️ %s SHORT STOP: close %.2f > TS %.2f", symbol, last_close, ts)
-                        await close_position(symbol, f"Trailing Stop (5dk kapanış ${last_close:,.2f} > ${ts:,.2f})")
+                        await close_position(symbol, f"Trailing Stop (5dk kapanış ${last_close:,.2f} ↑ TS ${ts:,.2f})")
                         return
 
         # ── 4) Açık pozisyon YOKSA sinyal tara
