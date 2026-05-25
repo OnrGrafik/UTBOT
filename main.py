@@ -57,6 +57,16 @@ BTC_SECRET = os.environ.get("BTC_WEBHOOK_SECRET", WEBHOOK_SECRET)
 ETH_SECRET = os.environ.get("ETH_WEBHOOK_SECRET", WEBHOOK_SECRET)
 SYMBOL_SECRETS = {"BTCUSDT": BTC_SECRET, "ETHUSDT": ETH_SECRET}
 
+# ─── HATA / ALERT KANALI ─────────────────────────────────────────────────────
+# https://t.me/c/3896040852/1/42734
+ALERT_CHAT_ID   = int(os.environ.get("ALERT_CHAT_ID",   "-1003896040852"))
+ALERT_THREAD_ID = int(os.environ.get("ALERT_THREAD_ID", "1"))
+ALERT_MSG_ID    = int(os.environ.get("ALERT_MSG_ID",    "42734"))
+
+# Son mesaj — /test komutu için
+_son_mesaj_utbot: str = ""
+_son_mesaj_lock_ut = asyncio.Lock()
+
 # Her sembol için kendi lock'u (eş zamanlılık)
 _locks = {sym: asyncio.Lock() for sym in SYMBOLS}
 
@@ -252,7 +262,44 @@ def cancel_all_orders(symbol):
 def html_safe(val) -> str:
     return str(val).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+def alert_tg_sync(mesaj: str):
+    """Kritik hataları alert kanalına SYNC olarak gönderir (herhangi bir yerden çağrılabilir)."""
+    try:
+        import httpx as _httpx
+        _httpx.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id"             : ALERT_CHAT_ID,
+                "text"                : mesaj,
+                "parse_mode"          : "HTML",
+                "message_thread_id"   : ALERT_THREAD_ID,
+                "reply_to_message_id" : ALERT_MSG_ID,
+                "disable_web_page_preview": True,
+            }, timeout=10
+        )
+    except Exception as e:
+        log.error("alert_tg_sync hatası: %s", e)
+
+async def alert_tg_ut(mesaj: str):
+    """Kritik hataları alert kanalına ASYNC olarak gönderir."""
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id"             : ALERT_CHAT_ID,
+                    "text"                : mesaj,
+                    "parse_mode"          : "HTML",
+                    "message_thread_id"   : ALERT_THREAD_ID,
+                    "reply_to_message_id" : ALERT_MSG_ID,
+                    "disable_web_page_preview": True,
+                }, timeout=10
+            )
+    except Exception as e:
+        log.error("alert_tg_ut hatası: %s", e)
+
 async def tg(text: str):
+    global _son_mesaj_utbot
     params = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if TELEGRAM_THREAD_ID:
         params["message_thread_id"] = TELEGRAM_THREAD_ID
@@ -269,8 +316,12 @@ async def tg(text: str):
                                        json=params2, timeout=10)
                 if r2.status_code != 200:
                     log.warning("Telegram (plain): %s", r2.text)
+                    await alert_tg_ut(f"⚠️ <b>UTBOT Telegram hatası</b>\n{html_safe(r2.text[:200])}")
+        else:
+            _son_mesaj_utbot = text
     except Exception as e:
         log.error("TG: %s", e)
+        await alert_tg_ut(f"🚨 <b>UTBOT Telegram bağlantı hatası</b>\n{html_safe(str(e))}")
 
 def reset_daily_if_needed():
     today = datetime.now(TZ).date().isoformat()
@@ -676,6 +727,7 @@ async def process_symbol(symbol: str):
 
     except Exception as e:
         log.error("process_symbol %s: %s", symbol, e, exc_info=True)
+        await alert_tg_ut(f"🚨 <b>UTBOT process_symbol hatası</b> — {html_safe(symbol)}\n{html_safe(str(e)[:200]}")
 
 async def main_loop():
     await asyncio.sleep(10)
@@ -686,6 +738,7 @@ async def main_loop():
                 await process_symbol(sym)
         except Exception as e:
             log.error("main_loop: %s", e)
+            await alert_tg_ut(f"🚨 <b>UTBOT ana döngü hatası</b>\n{html_safe(str(e)[:200]}")
         await asyncio.sleep(60)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -961,6 +1014,49 @@ async def rep_w(): await send_weekly_report(); return {"status": "sent"}
 
 @app.get("/report/monthly")
 async def rep_m(): await send_monthly_report(); return {"status": "sent"}
+
+@app.post("/test-alert")
+async def test_alert(request: Request):
+    """
+    Telegram'dan /test komutu geldiğinde UTBOT'un durumunu alert kanalına gönderir.
+    OAR tarafından çağrılır (veya doğrudan POST edilebilir).
+    """
+    simdi = datetime.now(TZ).strftime("%d.%m.%Y %H:%M")
+    pos_satirlar = []
+    for sym, p in _positions.items():
+        if p:
+            try:
+                cur = get_current_price(sym)
+                sign = 1 if p["side"] == "Buy" else -1
+                pnl_pct = ((cur - p["entry"]) / p["entry"]) * sign * 100
+                pos_satirlar.append(
+                    f"  {sym}: {'LONG' if p['side']=='Buy' else 'SHORT'} "
+                    f"@ ${p['entry']:,.2f} → ${cur:,.2f} ({pnl_pct:+.2f}%)"
+                )
+            except Exception:
+                pos_satirlar.append(f"  {sym}: pozisyon var, fiyat alınamadı")
+        else:
+            pos_satirlar.append(f"  {sym}: pozisyon yok")
+
+    bal = get_balance()
+    mesaj = (
+        f"🤖 <b>UTBOT Durum Raporu — {simdi} TR</b>\n"
+        f"Bakiye: <b>${bal:.2f}</b> USDT\n"
+        f"Günlük P&L: <b>${_daily['pnl']:+.2f}</b> / ${DAILY_TARGET:.0f}\n"
+        f"Kaldıraç: {LEVERAGE}x | Testnet: {BYBIT_TESTNET}\n\n"
+        f"<b>Pozisyonlar:</b>\n" + "\n".join(pos_satirlar)
+    )
+
+    if _son_mesaj_utbot:
+        mesaj += f"\n\n<b>Son mesaj:</b>\n{_son_mesaj_utbot[:300]}"
+
+    await alert_tg_ut(mesaj)
+
+    # Son mesajı tekrar ana kanala gönder
+    if _son_mesaj_utbot:
+        await tg(f"🔁 [TEST] {_son_mesaj_utbot}")
+
+    return {"status": "ok"}
 
 @app.get("/")
 async def root():
