@@ -667,16 +667,21 @@ async def process():
             sign  = 1 if pos["side"] == "Buy" else -1
             pnl_usd = (pos["order_usdt"] * LEVERAGE) * ((price - entry) / entry) * sign
 
-            # Anlık $10 TP
-            if pnl_usd >= DAILY_TP_USD:
-                log.info("💰 ETH anlık TP: $%.2f", pnl_usd)
-                await close_eth_position(f"TP ${pnl_usd:+.2f}")
+            # Kümülatif TP kontrolü: bugünkü toplam + açık pozisyon PNL >= hedef
+            kumulatif_pnl = _daily["pnl"] + pnl_usd
+            if kumulatif_pnl >= DAILY_TP_USD:
+                log.info("💰 Kümülatif TP: bugün=$%.2f + açık=$%.2f = $%.2f",
+                         _daily["pnl"], pnl_usd, kumulatif_pnl)
+                await close_eth_position(
+                    f"TP (kümülatif ${kumulatif_pnl:+.2f} / bugün ${_daily['pnl']:+.2f} + açık ${pnl_usd:+.2f})")
                 return
 
-            # Anlık $10 SL
-            if pnl_usd <= -DAILY_SL_USD:
-                log.info("🛑 ETH anlık SL: $%.2f", pnl_usd)
-                await close_eth_position(f"SL ${pnl_usd:+.2f}")
+            # Kümülatif SL kontrolü: bugünkü toplam + açık pozisyon PNL <= -limit
+            if kumulatif_pnl <= -DAILY_SL_USD:
+                log.info("🛑 Kümülatif SL: bugün=$%.2f + açık=$%.2f = $%.2f",
+                         _daily["pnl"], pnl_usd, kumulatif_pnl)
+                await close_eth_position(
+                    f"SL (kümülatif ${kumulatif_pnl:+.2f} / bugün ${_daily['pnl']:+.2f} + açık ${pnl_usd:+.2f})")
                 return
 
             # Trailing Stop — son kapanmış mumda
